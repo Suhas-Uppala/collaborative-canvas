@@ -91,9 +91,18 @@ const CanvasModule = (function () {
 
     function getCanvasCoordinates(event) {
         const rect = canvas.getBoundingClientRect();
+        let clientX, clientY;
 
-        const clientX = event.touches ? event.touches[0].clientX : event.clientX;
-        const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+        if (event.touches && event.touches.length > 0) {
+            clientX = event.touches[0].clientX;
+            clientY = event.touches[0].clientY;
+        } else if (event.changedTouches && event.changedTouches.length > 0) {
+            clientX = event.changedTouches[0].clientX;
+            clientY = event.changedTouches[0].clientY;
+        } else {
+            clientX = event.clientX;
+            clientY = event.clientY;
+        }
 
         return {
             x: clientX - rect.left,
@@ -181,7 +190,14 @@ const CanvasModule = (function () {
 
         isDrawing = false;
 
-        const endPoint = e ? getCanvasCoordinates(e) : lastPoint;
+        let endPoint = lastPoint;
+        if (e) {
+            try {
+                endPoint = getCanvasCoordinates(e);
+            } catch (err) {
+                endPoint = lastPoint;
+            }
+        }
 
         clearPreview();
 
