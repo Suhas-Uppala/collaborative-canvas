@@ -40,11 +40,11 @@ const WebSocketModule = (function () {
 
         socket.on('cursor_update', handleCursorUpdate);
 
-        console.log('🔌 WebSocket module initialized');
+        console.log('WebSocket module initialized');
     }
 
     function handleConnect() {
-        console.log('✅ Connected to server');
+        console.log('Connected to server');
         isConnected = true;
         if (callbacks.onConnectionChange) {
             callbacks.onConnectionChange(true);
@@ -52,7 +52,7 @@ const WebSocketModule = (function () {
     }
 
     function handleDisconnect() {
-        console.log('❌ Disconnected from server');
+        console.log('Disconnected from server');
         isConnected = false;
         if (callbacks.onConnectionChange) {
             callbacks.onConnectionChange(false);
@@ -60,11 +60,11 @@ const WebSocketModule = (function () {
     }
 
     function handleError(error) {
-        console.error('🔴 Connection error:', error);
+        console.error('Connection error:', error);
     }
 
     function handleSessionCreated(session) {
-        console.log('👤 Session created:', session);
+        console.log('Session created:', session);
         currentSession = session;
         if (callbacks.onSessionCreated) {
             callbacks.onSessionCreated(session);
@@ -72,21 +72,21 @@ const WebSocketModule = (function () {
     }
 
     function handleUsersList(users) {
-        console.log('👥 Users in room:', users);
+        console.log('Users in room:', users);
         if (callbacks.onUsersList) {
             callbacks.onUsersList(users);
         }
     }
 
     function handleUserJoined(user) {
-        console.log('➕ User joined:', user.userName);
+        console.log('User joined:', user.userName);
         if (callbacks.onUserJoined) {
             callbacks.onUserJoined(user);
         }
     }
 
     function handleUserLeft(user) {
-        console.log('➖ User left:', user.userName);
+        console.log('User left:', user.userName);
         if (callbacks.onUserLeft) {
             callbacks.onUserLeft(user);
         }
@@ -105,14 +105,14 @@ const WebSocketModule = (function () {
     }
 
     function handleSyncStrokes(strokes) {
-        console.log('🔄 Syncing strokes:', strokes.length);
+        console.log('Syncing strokes:', strokes.length);
         if (callbacks.onSyncStrokes) {
             callbacks.onSyncStrokes(strokes);
         }
     }
 
     function handleCanvasCleared() {
-        console.log('🧹 Canvas cleared');
+        console.log('Canvas cleared');
         if (callbacks.onCanvasCleared) {
             callbacks.onCanvasCleared();
         }

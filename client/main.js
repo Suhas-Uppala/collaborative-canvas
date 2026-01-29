@@ -68,7 +68,7 @@
 
         checkExistingSession();
 
-        console.log('🚀 Application initialized with paint tools');
+        console.log('Application initialized with paint tools');
     }
 
     function checkExistingSession() {

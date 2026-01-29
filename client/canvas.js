@@ -49,7 +49,7 @@ const CanvasModule = (function () {
 
         clearCanvas();
 
-        console.log('🎨 Canvas initialized with shape tools');
+        console.log('Canvas initialized with shape tools');
     }
 
     function createPreviewCanvas() {
