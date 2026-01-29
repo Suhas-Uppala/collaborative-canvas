@@ -110,6 +110,60 @@ const CanvasModule = (function () {
         };
     }
 
+    function toNormalized(point) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: point.x / rect.width,
+            y: point.y / rect.height
+        };
+    }
+
+    function fromNormalized(point) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: point.x * rect.width,
+            y: point.y * rect.height
+        };
+    }
+
+    function normalizeSegment(segment) {
+        return {
+            start: toNormalized(segment.start),
+            end: toNormalized(segment.end),
+            color: segment.color,
+            width: segment.width
+        };
+    }
+
+    function denormalizeSegment(segment) {
+        return {
+            start: fromNormalized(segment.start),
+            end: fromNormalized(segment.end),
+            color: segment.color,
+            width: segment.width
+        };
+    }
+
+    function normalizeStroke(stroke) {
+        const normalized = {
+            ...stroke,
+            points: stroke.points.map(p => toNormalized(p))
+        };
+        if (stroke.startPoint) normalized.startPoint = toNormalized(stroke.startPoint);
+        if (stroke.endPoint) normalized.endPoint = toNormalized(stroke.endPoint);
+        return normalized;
+    }
+
+    function denormalizeStroke(stroke) {
+        const denormalized = {
+            ...stroke,
+            points: stroke.points.map(p => fromNormalized(p))
+        };
+        if (stroke.startPoint) denormalized.startPoint = fromNormalized(stroke.startPoint);
+        if (stroke.endPoint) denormalized.endPoint = fromNormalized(stroke.endPoint);
+        return denormalized;
+    }
+
     function setupEventListeners() {
         canvas.addEventListener('mousedown', handlePointerDown);
         canvas.addEventListener('mousemove', handlePointerMove);
@@ -173,7 +227,8 @@ const CanvasModule = (function () {
             const now = Date.now();
             if (now - lastEmitTime >= EMIT_INTERVAL && onDrawingStep) {
                 if (strokeBuffer.length > 0) {
-                    onDrawingStep(strokeBuffer);
+                    const normalizedBuffer = strokeBuffer.map(seg => normalizeSegment(seg));
+                    onDrawingStep(normalizedBuffer);
                     strokeBuffer = [];
                     lastEmitTime = now;
                 }
@@ -211,7 +266,8 @@ const CanvasModule = (function () {
         }
 
         if (strokeBuffer.length > 0 && onDrawingStep) {
-            onDrawingStep(strokeBuffer);
+            const normalizedBuffer = strokeBuffer.map(seg => normalizeSegment(seg));
+            onDrawingStep(normalizedBuffer);
             strokeBuffer = [];
         }
 
@@ -220,13 +276,13 @@ const CanvasModule = (function () {
                 if (currentStroke.points.length > 1) {
                     completedStrokes.push(currentStroke);
                     if (onStrokeComplete) {
-                        onStrokeComplete(currentStroke);
+                        onStrokeComplete(normalizeStroke(currentStroke));
                     }
                 }
             } else {
                 completedStrokes.push(currentStroke);
                 if (onStrokeComplete) {
-                    onStrokeComplete(currentStroke);
+                    onStrokeComplete(normalizeStroke(currentStroke));
                 }
             }
         }
@@ -324,7 +380,7 @@ const CanvasModule = (function () {
     function emitCursorPosition(point) {
         const now = Date.now();
         if (now - lastCursorEmit >= 33 && onCursorMove) {
-            onCursorMove(point);
+            onCursorMove(toNormalized(point));
             lastCursorEmit = now;
         }
     }
@@ -375,18 +431,20 @@ const CanvasModule = (function () {
     function handleRemoteDrawingStep(userId, segments) {
         if (Array.isArray(segments)) {
             segments.forEach(segment => {
-                drawLineSegment(segment.start, segment.end, segment.color, segment.width);
+                const local = denormalizeSegment(segment);
+                drawLineSegment(local.start, local.end, local.color, local.width);
             });
         }
     }
 
     function addRemoteStroke(stroke) {
-        completedStrokes.push(stroke);
-        drawStroke(stroke);
+        const localStroke = denormalizeStroke(stroke);
+        completedStrokes.push(localStroke);
+        drawStroke(localStroke);
     }
 
     function syncStrokes(strokes) {
-        completedStrokes = strokes;
+        completedStrokes = strokes.map(s => denormalizeStroke(s));
         redrawAll();
     }
 

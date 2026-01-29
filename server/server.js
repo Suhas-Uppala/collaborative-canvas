@@ -94,7 +94,7 @@ io.on('connection', (socket) => {
 
         socket.to(session.roomId).emit('drawing_update', {
             userId: session.userId,
-            ...data
+            segments: data
         });
     });
 

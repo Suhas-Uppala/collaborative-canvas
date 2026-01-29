@@ -336,7 +336,7 @@
     }
 
     function handleDrawingUpdate(data) {
-        CanvasModule.handleRemoteDrawingStep(data.userId, data);
+        CanvasModule.handleRemoteDrawingStep(data.userId, data.segments);
     }
 
     function handleCursorUpdate(data) {
@@ -381,7 +381,10 @@
             elements.cursorsContainer.appendChild(cursor);
         }
 
-        cursor.style.transform = `translate(${position.x}px, ${position.y}px)`;
+        const canvasRect = elements.canvas.getBoundingClientRect();
+        const localX = position.x * canvasRect.width;
+        const localY = position.y * canvasRect.height;
+        cursor.style.transform = `translate(${localX}px, ${localY}px)`;
     }
 
     function createGhostCursor(userId, userName, color) {
