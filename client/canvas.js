@@ -1,26 +1,24 @@
 const CanvasModule = (function () {
     let canvas, ctx;
     let isDrawing = false;
+    let isPanning = false;
     let currentStroke = null;
     let currentColor = '#FFFFFF';
     let currentWidth = 5;
     let lastPoint = null;
     let startPoint = null;
 
+    let panOffset = { x: 0, y: 0 };
+    let lastPanPoint = null;
+
     const TOOLS = {
         PEN: 'pen',
         ERASER: 'eraser',
         LINE: 'line',
-        RECTANGLE: 'rectangle',
-        CIRCLE: 'circle',
-        TRIANGLE: 'triangle',
-        FILL_RECTANGLE: 'fill_rectangle',
-        FILL_CIRCLE: 'fill_circle',
-        FILL_TRIANGLE: 'fill_triangle'
+        PAN: 'pan'
     };
 
     let currentTool = TOOLS.PEN;
-    let fillShape = false;
 
     let strokeBuffer = [];
     let lastEmitTime = 0;
@@ -49,7 +47,7 @@ const CanvasModule = (function () {
 
         clearCanvas();
 
-        console.log('Canvas initialized with shape tools');
+        console.log('Canvas initialized with pan support');
     }
 
     function createPreviewCanvas() {
@@ -110,58 +108,18 @@ const CanvasModule = (function () {
         };
     }
 
-    function toNormalized(point) {
-        const rect = canvas.getBoundingClientRect();
+    function screenToWorld(point) {
         return {
-            x: point.x / rect.width,
-            y: point.y / rect.height
+            x: point.x - panOffset.x,
+            y: point.y - panOffset.y
         };
     }
 
-    function fromNormalized(point) {
-        const rect = canvas.getBoundingClientRect();
+    function worldToScreen(point) {
         return {
-            x: point.x * rect.width,
-            y: point.y * rect.height
+            x: point.x + panOffset.x,
+            y: point.y + panOffset.y
         };
-    }
-
-    function normalizeSegment(segment) {
-        return {
-            start: toNormalized(segment.start),
-            end: toNormalized(segment.end),
-            color: segment.color,
-            width: segment.width
-        };
-    }
-
-    function denormalizeSegment(segment) {
-        return {
-            start: fromNormalized(segment.start),
-            end: fromNormalized(segment.end),
-            color: segment.color,
-            width: segment.width
-        };
-    }
-
-    function normalizeStroke(stroke) {
-        const normalized = {
-            ...stroke,
-            points: stroke.points.map(p => toNormalized(p))
-        };
-        if (stroke.startPoint) normalized.startPoint = toNormalized(stroke.startPoint);
-        if (stroke.endPoint) normalized.endPoint = toNormalized(stroke.endPoint);
-        return normalized;
-    }
-
-    function denormalizeStroke(stroke) {
-        const denormalized = {
-            ...stroke,
-            points: stroke.points.map(p => fromNormalized(p))
-        };
-        if (stroke.startPoint) denormalized.startPoint = fromNormalized(stroke.startPoint);
-        if (stroke.endPoint) denormalized.endPoint = fromNormalized(stroke.endPoint);
-        return denormalized;
     }
 
     function setupEventListeners() {
@@ -174,52 +132,139 @@ const CanvasModule = (function () {
         canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
         canvas.addEventListener('touchend', handlePointerUp);
         canvas.addEventListener('touchcancel', handlePointerUp);
+
+        canvas.addEventListener('wheel', handleWheel, { passive: false });
+
+        document.addEventListener('keydown', handleKeyDown);
+        document.addEventListener('keyup', handleKeyUp);
+    }
+
+    let spacePressed = false;
+
+    function handleKeyDown(e) {
+        if (e.code === 'Space' && !spacePressed) {
+            spacePressed = true;
+            canvas.style.cursor = 'grab';
+        }
+    }
+
+    function handleKeyUp(e) {
+        if (e.code === 'Space') {
+            spacePressed = false;
+            updateCursor();
+        }
+    }
+
+    function updateCursor() {
+        if (currentTool === TOOLS.PAN) {
+            canvas.style.cursor = isPanning ? 'grabbing' : 'grab';
+        } else if (currentTool === TOOLS.ERASER) {
+            canvas.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'24\' height=\'24\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'white\' stroke-width=\'2\'%3E%3Ccircle cx=\'12\' cy=\'12\' r=\'8\'/%3E%3C/svg%3E") 12 12, auto';
+        } else {
+            canvas.style.cursor = 'crosshair';
+        }
+    }
+
+    function handleWheel(e) {
+        e.preventDefault();
+        panOffset.x -= e.deltaX;
+        panOffset.y -= e.deltaY;
+        redrawAll();
     }
 
     function handleTouchStart(e) {
+        if (e.touches.length === 2) {
+            e.preventDefault();
+            isPanning = true;
+            const touch1 = e.touches[0];
+            const touch2 = e.touches[1];
+            lastPanPoint = {
+                x: (touch1.clientX + touch2.clientX) / 2,
+                y: (touch1.clientY + touch2.clientY) / 2
+            };
+            return;
+        }
         e.preventDefault();
         handlePointerDown(e);
     }
 
     function handleTouchMove(e) {
+        if (e.touches.length === 2 && isPanning) {
+            e.preventDefault();
+            const touch1 = e.touches[0];
+            const touch2 = e.touches[1];
+            const currentPoint = {
+                x: (touch1.clientX + touch2.clientX) / 2,
+                y: (touch1.clientY + touch2.clientY) / 2
+            };
+
+            panOffset.x += currentPoint.x - lastPanPoint.x;
+            panOffset.y += currentPoint.y - lastPanPoint.y;
+            lastPanPoint = currentPoint;
+
+            redrawAll();
+            return;
+        }
         e.preventDefault();
         handlePointerMove(e);
     }
 
     function handlePointerDown(e) {
+        const screenPoint = getCanvasCoordinates(e);
+
+        if (spacePressed || currentTool === TOOLS.PAN) {
+            isPanning = true;
+            lastPanPoint = screenPoint;
+            canvas.style.cursor = 'grabbing';
+            return;
+        }
+
         isDrawing = true;
-        const point = getCanvasCoordinates(e);
-        lastPoint = point;
-        startPoint = point;
+        const worldPoint = screenToWorld(screenPoint);
+        lastPoint = worldPoint;
+        startPoint = worldPoint;
 
         currentStroke = {
-            points: [point],
+            points: [worldPoint],
             color: currentTool === TOOLS.ERASER ? BG_COLOR : currentColor,
             width: currentTool === TOOLS.ERASER ? currentWidth * 3 : currentWidth,
             tool: currentTool,
-            startPoint: point
+            startPoint: worldPoint
         };
 
         strokeBuffer = [];
     }
 
     function handlePointerMove(e) {
-        const point = getCanvasCoordinates(e);
+        const screenPoint = getCanvasCoordinates(e);
 
-        emitCursorPosition(point);
+        if (isPanning && lastPanPoint) {
+            panOffset.x += screenPoint.x - lastPanPoint.x;
+            panOffset.y += screenPoint.y - lastPanPoint.y;
+            lastPanPoint = screenPoint;
+            redrawAll();
+            return;
+        }
+
+        const worldPoint = screenToWorld(screenPoint);
+
+        emitCursorPosition(worldPoint);
 
         if (!isDrawing || !lastPoint) return;
 
         if (currentTool === TOOLS.PEN || currentTool === TOOLS.ERASER) {
             const drawColor = currentTool === TOOLS.ERASER ? BG_COLOR : currentColor;
             const drawWidth = currentTool === TOOLS.ERASER ? currentWidth * 3 : currentWidth;
-            drawLineSegment(lastPoint, point, drawColor, drawWidth);
 
-            currentStroke.points.push(point);
+            const screenStart = worldToScreen(lastPoint);
+            const screenEnd = worldToScreen(worldPoint);
+            drawLineSegment(screenStart, screenEnd, drawColor, drawWidth);
+
+            currentStroke.points.push(worldPoint);
 
             strokeBuffer.push({
                 start: lastPoint,
-                end: point,
+                end: worldPoint,
                 color: drawColor,
                 width: drawWidth
             });
@@ -227,20 +272,26 @@ const CanvasModule = (function () {
             const now = Date.now();
             if (now - lastEmitTime >= EMIT_INTERVAL && onDrawingStep) {
                 if (strokeBuffer.length > 0) {
-                    const normalizedBuffer = strokeBuffer.map(seg => normalizeSegment(seg));
-                    onDrawingStep(normalizedBuffer);
+                    onDrawingStep(strokeBuffer);
                     strokeBuffer = [];
                     lastEmitTime = now;
                 }
             }
 
-            lastPoint = point;
+            lastPoint = worldPoint;
         } else {
-            drawShapePreview(startPoint, point);
+            drawShapePreview(startPoint, worldPoint);
         }
     }
 
     function handlePointerUp(e) {
+        if (isPanning) {
+            isPanning = false;
+            lastPanPoint = null;
+            updateCursor();
+            return;
+        }
+
         if (!isDrawing) return;
 
         isDrawing = false;
@@ -248,7 +299,8 @@ const CanvasModule = (function () {
         let endPoint = lastPoint;
         if (e) {
             try {
-                endPoint = getCanvasCoordinates(e);
+                const screenPoint = getCanvasCoordinates(e);
+                endPoint = screenToWorld(screenPoint);
             } catch (err) {
                 endPoint = lastPoint;
             }
@@ -256,9 +308,11 @@ const CanvasModule = (function () {
 
         clearPreview();
 
-        if (currentTool !== TOOLS.PEN && currentTool !== TOOLS.ERASER) {
+        if (currentTool !== TOOLS.PEN && currentTool !== TOOLS.ERASER && currentTool !== TOOLS.PAN) {
             if (startPoint && endPoint) {
-                drawShape(startPoint, endPoint, currentColor, currentWidth, currentTool, false);
+                const screenStart = worldToScreen(startPoint);
+                const screenEnd = worldToScreen(endPoint);
+                drawShape(screenStart, screenEnd, currentColor, currentWidth, currentTool, false);
 
                 currentStroke.endPoint = endPoint;
                 currentStroke.points = [startPoint, endPoint];
@@ -266,23 +320,22 @@ const CanvasModule = (function () {
         }
 
         if (strokeBuffer.length > 0 && onDrawingStep) {
-            const normalizedBuffer = strokeBuffer.map(seg => normalizeSegment(seg));
-            onDrawingStep(normalizedBuffer);
+            onDrawingStep(strokeBuffer);
             strokeBuffer = [];
         }
 
-        if (currentStroke) {
+        if (currentStroke && currentTool !== TOOLS.PAN) {
             if (currentTool === TOOLS.PEN || currentTool === TOOLS.ERASER) {
                 if (currentStroke.points.length > 1) {
                     completedStrokes.push(currentStroke);
                     if (onStrokeComplete) {
-                        onStrokeComplete(normalizeStroke(currentStroke));
+                        onStrokeComplete(currentStroke);
                     }
                 }
             } else {
                 completedStrokes.push(currentStroke);
                 if (onStrokeComplete) {
-                    onStrokeComplete(normalizeStroke(currentStroke));
+                    onStrokeComplete(currentStroke);
                 }
             }
         }
@@ -295,6 +348,9 @@ const CanvasModule = (function () {
     function drawShapePreview(start, end) {
         clearPreview();
 
+        const screenStart = worldToScreen(start);
+        const screenEnd = worldToScreen(end);
+
         previewCtx.strokeStyle = currentColor;
         previewCtx.fillStyle = currentColor;
         previewCtx.lineWidth = currentWidth;
@@ -302,7 +358,7 @@ const CanvasModule = (function () {
         previewCtx.lineJoin = 'round';
         previewCtx.setLineDash([5, 5]);
 
-        drawShapeOnContext(previewCtx, start, end, currentTool, false);
+        drawShapeOnContext(previewCtx, screenStart, screenEnd, currentTool, false);
 
         previewCtx.setLineDash([]);
     }
@@ -325,62 +381,17 @@ const CanvasModule = (function () {
     }
 
     function drawShapeOnContext(context, start, end, tool, isFinal) {
-        const fill = tool.startsWith('fill_');
-        const shapeType = fill ? tool.replace('fill_', '') : tool;
-
         context.beginPath();
-
-        switch (shapeType) {
-            case 'line':
-                context.moveTo(start.x, start.y);
-                context.lineTo(end.x, end.y);
-                context.stroke();
-                break;
-
-            case 'rectangle':
-                const width = end.x - start.x;
-                const height = end.y - start.y;
-                if (fill) {
-                    context.fillRect(start.x, start.y, width, height);
-                } else {
-                    context.strokeRect(start.x, start.y, width, height);
-                }
-                break;
-
-            case 'circle':
-                const radiusX = Math.abs(end.x - start.x) / 2;
-                const radiusY = Math.abs(end.y - start.y) / 2;
-                const centerX = start.x + (end.x - start.x) / 2;
-                const centerY = start.y + (end.y - start.y) / 2;
-
-                context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-                if (fill) {
-                    context.fill();
-                } else {
-                    context.stroke();
-                }
-                break;
-
-            case 'triangle':
-                const midX = start.x + (end.x - start.x) / 2;
-                context.moveTo(midX, start.y);
-                context.lineTo(end.x, end.y);
-                context.lineTo(start.x, end.y);
-                context.closePath();
-                if (fill) {
-                    context.fill();
-                } else {
-                    context.stroke();
-                }
-                break;
-        }
+        context.moveTo(start.x, start.y);
+        context.lineTo(end.x, end.y);
+        context.stroke();
     }
 
     let lastCursorEmit = 0;
     function emitCursorPosition(point) {
         const now = Date.now();
         if (now - lastCursorEmit >= 33 && onCursorMove) {
-            onCursorMove(toNormalized(point));
+            onCursorMove(point);
             lastCursorEmit = now;
         }
     }
@@ -402,9 +413,13 @@ const CanvasModule = (function () {
 
         if (stroke.tool && stroke.tool !== TOOLS.PEN && stroke.tool !== TOOLS.ERASER) {
             if (stroke.startPoint && stroke.endPoint) {
-                drawShape(stroke.startPoint, stroke.endPoint, stroke.color, stroke.width, stroke.tool);
+                const screenStart = worldToScreen(stroke.startPoint);
+                const screenEnd = worldToScreen(stroke.endPoint);
+                drawShape(screenStart, screenEnd, stroke.color, stroke.width, stroke.tool);
             } else if (stroke.points.length >= 2) {
-                drawShape(stroke.points[0], stroke.points[1], stroke.color, stroke.width, stroke.tool);
+                const screenStart = worldToScreen(stroke.points[0]);
+                const screenEnd = worldToScreen(stroke.points[1]);
+                drawShape(screenStart, screenEnd, stroke.color, stroke.width, stroke.tool);
             }
             return;
         }
@@ -414,16 +429,18 @@ const CanvasModule = (function () {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        ctx.beginPath();
-        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+        const screenPoints = stroke.points.map(p => worldToScreen(p));
 
-        for (let i = 1; i < stroke.points.length - 1; i++) {
-            const xc = (stroke.points[i].x + stroke.points[i + 1].x) / 2;
-            const yc = (stroke.points[i].y + stroke.points[i + 1].y) / 2;
-            ctx.quadraticCurveTo(stroke.points[i].x, stroke.points[i].y, xc, yc);
+        ctx.beginPath();
+        ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
+
+        for (let i = 1; i < screenPoints.length - 1; i++) {
+            const xc = (screenPoints[i].x + screenPoints[i + 1].x) / 2;
+            const yc = (screenPoints[i].y + screenPoints[i + 1].y) / 2;
+            ctx.quadraticCurveTo(screenPoints[i].x, screenPoints[i].y, xc, yc);
         }
 
-        const last = stroke.points[stroke.points.length - 1];
+        const last = screenPoints[screenPoints.length - 1];
         ctx.lineTo(last.x, last.y);
         ctx.stroke();
     }
@@ -431,20 +448,20 @@ const CanvasModule = (function () {
     function handleRemoteDrawingStep(userId, segments) {
         if (Array.isArray(segments)) {
             segments.forEach(segment => {
-                const local = denormalizeSegment(segment);
-                drawLineSegment(local.start, local.end, local.color, local.width);
+                const screenStart = worldToScreen(segment.start);
+                const screenEnd = worldToScreen(segment.end);
+                drawLineSegment(screenStart, screenEnd, segment.color, segment.width);
             });
         }
     }
 
     function addRemoteStroke(stroke) {
-        const localStroke = denormalizeStroke(stroke);
-        completedStrokes.push(localStroke);
-        drawStroke(localStroke);
+        completedStrokes.push(stroke);
+        drawStroke(stroke);
     }
 
     function syncStrokes(strokes) {
-        completedStrokes = strokes.map(s => denormalizeStroke(s));
+        completedStrokes = strokes;
         redrawAll();
     }
 
@@ -460,6 +477,7 @@ const CanvasModule = (function () {
 
     function clearCanvas() {
         completedStrokes = [];
+        panOffset = { x: 0, y: 0 };
         const rect = canvas.getBoundingClientRect();
         ctx.fillStyle = BG_COLOR;
         ctx.fillRect(0, 0, rect.width, rect.height);
@@ -475,12 +493,7 @@ const CanvasModule = (function () {
 
     function setTool(tool) {
         currentTool = tool;
-
-        if (tool === TOOLS.ERASER) {
-            canvas.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'24\' height=\'24\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'white\' stroke-width=\'2\'%3E%3Ccircle cx=\'12\' cy=\'12\' r=\'8\'/%3E%3C/svg%3E") 12 12, auto';
-        } else {
-            canvas.style.cursor = 'crosshair';
-        }
+        updateCursor();
     }
 
     function getTool() {
@@ -499,6 +512,15 @@ const CanvasModule = (function () {
 
     function reinit() {
         resizeCanvas();
+    }
+
+    function resetPan() {
+        panOffset = { x: 0, y: 0 };
+        redrawAll();
+    }
+
+    function getPanOffset() {
+        return { ...panOffset };
     }
 
     function debounce(func, wait) {
@@ -523,6 +545,8 @@ const CanvasModule = (function () {
         syncStrokes,
         clearCanvas,
         redrawAll,
+        resetPan,
+        getPanOffset,
         TOOLS
     };
 })();

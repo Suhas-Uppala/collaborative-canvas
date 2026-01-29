@@ -27,6 +27,7 @@
         undoBtn: document.getElementById('undo-btn'),
         redoBtn: document.getElementById('redo-btn'),
         clearBtn: document.getElementById('clear-btn'),
+        resetViewBtn: document.getElementById('reset-view-btn'),
 
         currentToolName: document.getElementById('current-tool-name'),
 
@@ -44,12 +45,7 @@
         'pen': 'Pen',
         'eraser': 'Eraser',
         'line': 'Line',
-        'rectangle': 'Rectangle',
-        'fill_rectangle': 'Filled Rectangle',
-        'circle': 'Circle',
-        'fill_circle': 'Filled Circle',
-        'triangle': 'Triangle',
-        'fill_triangle': 'Filled Triangle'
+        'pan': 'Pan'
     };
 
     function init() {
@@ -198,6 +194,10 @@
             if (confirm('Are you sure you want to clear the canvas for everyone?')) {
                 WebSocketModule.emitClearCanvas();
             }
+        });
+
+        elements.resetViewBtn.addEventListener('click', () => {
+            CanvasModule.resetPan();
         });
 
         document.addEventListener('keydown', (e) => {
@@ -381,10 +381,10 @@
             elements.cursorsContainer.appendChild(cursor);
         }
 
-        const canvasRect = elements.canvas.getBoundingClientRect();
-        const localX = position.x * canvasRect.width;
-        const localY = position.y * canvasRect.height;
-        cursor.style.transform = `translate(${localX}px, ${localY}px)`;
+        const panOffset = CanvasModule.getPanOffset();
+        const screenX = position.x + panOffset.x;
+        const screenY = position.y + panOffset.y;
+        cursor.style.transform = `translate(${screenX}px, ${screenY}px)`;
     }
 
     function createGhostCursor(userId, userName, color) {
