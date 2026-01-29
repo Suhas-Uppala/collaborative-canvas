@@ -7,9 +7,18 @@
     "start": "node server/server.js",
     "dev": "node server/server.js"
   },
-  "keywords": ["canvas", "collaborative", "websocket", "drawing", "real-time"],
+  "keywords": [
+    "canvas",
+    "collaborative",
+    "websocket",
+    "drawing",
+    "real-time"
+  ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "express": "^4.18.2",
     "socket.io": "^4.7.2",
