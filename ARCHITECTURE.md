@@ -6,86 +6,110 @@ This document explains how the Collaborative Canvas works under the hood. I'm wr
 
 ## Overview
 
-The app follows a pretty standard client-server architecture. Users connect to a Node.js server via WebSockets, and the server broadcasts drawing events to everyone in the same room.
+The app follows a client-server architecture. Users connect to a Node.js server via WebSockets, and the server broadcasts drawing events to everyone in the same room. The canvas is infinite - users can pan around freely while drawings sync in world coordinates.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     CLIENT BROWSERS                          │
-├───────────────────┬───────────────────┬─────────────────────┤
-│      User A       │      User B       │      User C         │
-│   ┌───────────┐   │   ┌───────────┐   │   ┌───────────┐     │
-│   │  Canvas   │   │   │  Canvas   │   │   │  Canvas   │     │
-│   │  Module   │   │   │  Module   │   │   │  Module   │     │
-│   └─────┬─────┘   │   └─────┬─────┘   │   └─────┬─────┘     │
-│         │         │         │         │         │           │
-│   ┌─────┴─────┐   │   ┌─────┴─────┐   │   ┌─────┴─────┐     │
-│   │ WebSocket │   │   │ WebSocket │   │   │ WebSocket │     │
-│   └─────┬─────┘   │   └─────┬─────┘   │   └─────┬─────┘     │
-└─────────┼─────────┴─────────┼─────────┴─────────┼───────────┘
-          │                   │                   │
-          └───────────────────┼───────────────────┘
-                              │
++-------------------------------------------------------------+
+|                     CLIENT BROWSERS                          |
++-------------------+-------------------+---------------------+
+|      User A       |      User B       |      User C         |
+|   +-----------+   |   +-----------+   |   +-----------+     |
+|   |  Canvas   |   |   |  Canvas   |   |   |  Canvas   |     |
+|   |  Module   |   |   |  Module   |   |   |  Module   |     |
+|   +-----+-----+   |   +-----+-----+   |   +-----+-----+     |
+|         |         |         |         |         |           |
+|   +-----+-----+   |   +-----+-----+   |   +-----+-----+     |
+|   | WebSocket |   |   | WebSocket |   |   | WebSocket |     |
+|   +-----+-----+   |   +-----+-----+   |   +-----+-----+     |
++---------|---------+---------|---------+---------|-----------+
+          |                   |                   |
+          +-------------------+-------------------+
+                              |
                     Socket.io Connections
-                              │
-┌─────────────────────────────┴───────────────────────────────┐
-│                      NODE.JS SERVER                          │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│   ┌─────────────┐   ┌─────────────┐   ┌─────────────────┐   │
-│   │   Express   │   │  Socket.io  │   │  Static Files   │   │
-│   │   Server    │───│   Handler   │   │  (client/*.*)   │   │
-│   └─────────────┘   └──────┬──────┘   └─────────────────┘   │
-│                            │                                 │
-│              ┌─────────────┴─────────────┐                  │
-│              │                           │                  │
-│       ┌──────┴──────┐             ┌──────┴──────┐          │
-│       │    Rooms    │             │    State    │          │
-│       │   Manager   │             │   Manager   │          │
-│       │             │             │             │          │
-│       │ - User Map  │             │ - Strokes[] │          │
-│       │ - Sessions  │             │ - Redo Stack│          │
-│       └─────────────┘             └─────────────┘          │
-└──────────────────────────────────────────────────────────────┘
+                              |
++-----------------------------+-------------------------------+
+|                      NODE.JS SERVER                          |
++--------------------------------------------------------------+
+|                                                              |
+|   +-------------+   +-------------+   +-----------------+   |
+|   |   Express   |   |  Socket.io  |   |  Static Files   |   |
+|   |   Server    |---|   Handler   |   |  (client/*.*)   |   |
+|   +-------------+   +------+------+   +-----------------+   |
+|                            |                                 |
+|              +-------------+-------------+                  |
+|              |                           |                  |
+|       +------+------+             +------+------+          |
+|       |    Rooms    |             |    State    |          |
+|       |   Manager   |             |   Manager   |          |
+|       |             |             |             |          |
+|       | - User Map  |             | - Strokes[] |          |
+|       | - Sessions  |             | - Redo Stack|          |
+|       +-------------+             +-------------+          |
++--------------------------------------------------------------+
 ```
+
+---
+
+## Coordinate System
+
+The canvas uses a world coordinate system that allows infinite panning:
+
+### Screen vs World Coordinates
+
+- **Screen Coordinates**: Pixel positions on the user's screen (0,0 is top-left of canvas element)
+- **World Coordinates**: Absolute positions in the infinite canvas space
+- **Pan Offset**: The offset between screen and world coordinates
+
+```
+Screen Position = World Position + Pan Offset
+World Position = Screen Position - Pan Offset
+```
+
+### Cross-Device Sync
+
+All drawing data is transmitted in world coordinates. This means:
+- Drawings appear in the same absolute position regardless of screen size
+- Each user can pan independently without affecting others
+- Ghost cursors show correct positions even with different pan offsets
 
 ---
 
 ## Data Flow Diagram
 
-This is probably the most important thing to understand. Here's how a drawing action flows through the system:
+This is the most important thing to understand. Here's how a drawing action flows through the system:
 
 ### When User A Draws Something
 
 ```
 User A's Browser                    Server                    Other Users
-      │                               │                            │
-      │ 1. mousedown                  │                            │
-      │    (start collecting points)  │                            │
-      │                               │                            │
-      │ 2. mousemove (every ~16ms)    │                            │
-      ├──────── drawing_step ────────>│                            │
-      │    {points, color, width}     │                            │
-      │                               │                            │
-      │                               ├──── drawing_update ───────>│
-      │                               │   (for real-time preview)  │ 3. Render preview
-      │                               │                            │
-      │ 4. mouseup                    │                            │
-      ├──────── stroke_complete ─────>│                            │
-      │    {all points, color, width} │                            │
-      │                               │                            │
-      │                               │ 5. Server adds strokeId,   │
-      │                               │    userId, timestamp       │
-      │                               │                            │
-      │                               │ 6. Save to strokes[]       │
-      │                               │                            │
-      │                               ├──── stroke_received ──────>│
-      │                               │   (complete stroke data)   │ 7. Render final stroke
-      │                               │                            │
+      |                               |                            |
+      | 1. mousedown                  |                            |
+      |    (start collecting points)  |                            |
+      |                               |                            |
+      | 2. mousemove (every ~16ms)    |                            |
+      |-------- drawing_step -------->|                            |
+      |    {points, color, width}     |                            |
+      |                               |                            |
+      |                               |---- drawing_update ------->|
+      |                               |   (for real-time preview)  | 3. Render preview
+      |                               |                            |
+      | 4. mouseup                    |                            |
+      |-------- stroke_complete ----->|                            |
+      |    {all points, color, width} |                            |
+      |                               |                            |
+      |                               | 5. Server adds strokeId,   |
+      |                               |    userId, timestamp       |
+      |                               |                            |
+      |                               | 6. Save to strokes[]       |
+      |                               |                            |
+      |                               |---- stroke_received ------>|
+      |                               |   (complete stroke data)   | 7. Render final stroke
+      |                               |                            |
 ```
 
 The key insight here is that we send two types of messages:
-- **`drawing_step`**: Sent frequently while drawing, for real-time preview. These are NOT saved.
-- **`stroke_complete`**: Sent once when the user lifts their mouse. This IS saved.
+- **drawing_step**: Sent frequently while drawing, for real-time preview. These are NOT saved.
+- **stroke_complete**: Sent once when the user lifts their mouse. This IS saved.
 
 This separation means other users see a live preview of what's being drawn, but we only persist the final result.
 
@@ -93,56 +117,56 @@ This separation means other users see a live preview of what's being drawn, but 
 
 ```
 New User                            Server
-    │                                 │
-    ├──────── join_room ─────────────>│
-    │   {roomId, userName}            │
-    │                                 │ 1. Create session
-    │                                 │    (assign color, userId)
-    │                                 │
-    │<─────── session_created ────────┤
-    │   {userId, color, roomId}       │
-    │                                 │
-    │<─────── sync_strokes ───────────┤
-    │   [all existing strokes]        │ 2. Send complete state
-    │                                 │
-    │<─────── users_list ─────────────┤
-    │   [all current users]           │
-    │                                 │
-    │                                 ├──── user_joined ──────> Others
-    │                                 │                            │
+    |                                 |
+    |-------- join_room ------------->|
+    |   {roomId, userName}            |
+    |                                 | 1. Create session
+    |                                 |    (assign color, userId)
+    |                                 |
+    |<------- session_created --------|
+    |   {userId, color, roomId}       |
+    |                                 |
+    |<------- sync_strokes -----------|
+    |   [all existing strokes]        | 2. Send complete state
+    |                                 |
+    |<------- users_list -------------|
+    |   [all current users]           |
+    |                                 |
+    |                                 |---- user_joined -----> Others
+    |                                 |                            |
 ```
 
 ---
 
 ## WebSocket Protocol
 
-Here's the complete list of messages the client and server exchange. I'm using Socket.io, which handles the WebSocket connection and provides nice features like automatic reconnection.
+Here's the complete list of messages the client and server exchange. I'm using Socket.io, which handles the WebSocket connection and provides features like automatic reconnection.
 
 ### Messages the Client Sends
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `join_room` | `{roomId, userName}` | Join a drawing room |
-| `stroke_complete` | `{points, color, width}` | Finished drawing a stroke |
-| `drawing_step` | `{points, color, width}` | Live drawing preview (while mouse is down) |
-| `cursor_move` | `{x, y}` | Current cursor position |
-| `undo_stroke` | *(none)* | Undo last own stroke |
-| `redo_stroke` | *(none)* | Redo previously undone stroke |
-| `clear_canvas` | *(none)* | Clear all drawings in room |
+| join_room | {roomId, userName} | Join a drawing room |
+| stroke_complete | {points, color, width, tool} | Finished drawing a stroke |
+| drawing_step | [{start, end, color, width}] | Live drawing preview (while mouse is down) |
+| cursor_move | {x, y} | Current cursor position (world coordinates) |
+| undo_stroke | (none) | Undo last own stroke |
+| redo_stroke | (none) | Redo previously undone stroke |
+| clear_canvas | (none) | Clear all drawings in room |
 
 ### Messages the Client Receives
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `session_created` | `{userId, userName, color, roomId}` | Your session info after joining |
-| `sync_strokes` | `[Stroke, ...]` | Full state sync (on join or after undo) |
-| `users_list` | `[User, ...]` | List of users currently in room |
-| `user_joined` | `{userId, userName, color}` | Someone joined the room |
-| `user_left` | `{userId, userName}` | Someone left the room |
-| `stroke_received` | `Stroke` | New stroke from another user |
-| `drawing_update` | `{userId, points, ...}` | Live drawing preview from another user |
-| `cursor_update` | `{userId, userName, color, position}` | Another user's cursor moved |
-| `canvas_cleared` | *(none)* | Canvas was cleared by someone |
+| session_created | {userId, userName, color, roomId} | Your session info after joining |
+| sync_strokes | [Stroke, ...] | Full state sync (on join or after undo) |
+| users_list | [User, ...] | List of users currently in room |
+| user_joined | {userId, userName, color} | Someone joined the room |
+| user_left | {userId, userName} | Someone left the room |
+| stroke_received | Stroke | New stroke from another user |
+| drawing_update | {userId, segments} | Live drawing preview from another user |
+| cursor_update | {userId, userName, color, position} | Another user's cursor moved |
+| canvas_cleared | (none) | Canvas was cleared by someone |
 
 ### Data Structures
 
@@ -154,11 +178,14 @@ Here's the complete list of messages the client and server exchange. I'm using S
   "userName": "Alice",
   "color": "#FF6B6B",
   "width": 5,
+  "tool": "pen",
   "points": [
     {"x": 100, "y": 150},
     {"x": 102, "y": 153},
     {"x": 105, "y": 158}
   ],
+  "startPoint": {"x": 100, "y": 150},
+  "endPoint": {"x": 105, "y": 158},
   "timestamp": 1704067200000
 }
 ```
@@ -187,34 +214,34 @@ Here's how it works:
 
 ```
 Alice's View                Server                       Bob's View
-    │                         │                              │
-    │ Alice presses Ctrl+Z    │                              │
-    ├──── undo_stroke ───────>│                              │
-    │                         │                              │
-    │                         │ 1. Find strokes[]            │
-    │                         │    [Bob1, Alice1, Bob2,      │
-    │                         │     Alice2, Bob3]            │
-    │                         │                              │
-    │                         │ 2. Search from end for       │
-    │                         │    stroke where              │
-    │                         │    userId === Alice          │
-    │                         │    → Found: Alice2           │
-    │                         │                              │
-    │                         │ 3. Remove Alice2 from        │
-    │                         │    strokes[]                 │
-    │                         │                              │
-    │                         │ 4. Push Alice2 to            │
-    │                         │    Alice's redo stack        │
-    │                         │                              │
-    │<─── sync_strokes ───────┼──── sync_strokes ───────────>│
-    │   [Bob1, Alice1, Bob2, Bob3]                           │
-    │                         │                              │
-    │ 5. Redraw canvas        │                 5. Redraw canvas
+    |                         |                              |
+    | Alice presses Ctrl+Z    |                              |
+    |---- undo_stroke ------->|                              |
+    |                         |                              |
+    |                         | 1. Find strokes[]            |
+    |                         |    [Bob1, Alice1, Bob2,      |
+    |                         |     Alice2, Bob3]            |
+    |                         |                              |
+    |                         | 2. Search from end for       |
+    |                         |    stroke where              |
+    |                         |    userId === Alice          |
+    |                         |    -> Found: Alice2          |
+    |                         |                              |
+    |                         | 3. Remove Alice2 from        |
+    |                         |    strokes[]                 |
+    |                         |                              |
+    |                         | 4. Push Alice2 to            |
+    |                         |    Alice's redo stack        |
+    |                         |                              |
+    |<--- sync_strokes -------+---- sync_strokes ----------->|
+    |   [Bob1, Alice1, Bob2, Bob3]                           |
+    |                         |                              |
+    | 5. Redraw canvas        |                 5. Redraw canvas
 ```
 
 ### Why Full State Sync?
 
-You'll notice I send `sync_strokes` (the entire stroke array) instead of just "remove stroke X". This is intentional:
+You'll notice I send sync_strokes (the entire stroke array) instead of just "remove stroke X". This is intentional:
 
 1. **Simplicity** - The client just clears and redraws everything. No complex state management.
 2. **Consistency** - If a message gets lost, the next sync fixes it.
@@ -234,13 +261,59 @@ When Alice undoes a stroke, it goes onto Alice's redo stack. When she hits redo,
 
 ---
 
+## Infinite Canvas Implementation
+
+The infinite canvas allows users to pan around freely. Here's how it works:
+
+### Pan Offset Tracking
+
+Each client maintains its own pan offset:
+
+```javascript
+let panOffset = { x: 0, y: 0 };
+```
+
+### Drawing in World Coordinates
+
+When drawing, we convert screen coordinates to world coordinates:
+
+```javascript
+function screenToWorld(point) {
+    return {
+        x: point.x - panOffset.x,
+        y: point.y - panOffset.y
+    };
+}
+```
+
+When rendering, we convert world coordinates back to screen:
+
+```javascript
+function worldToScreen(point) {
+    return {
+        x: point.x + panOffset.x,
+        y: point.y + panOffset.y
+    };
+}
+```
+
+### Pan Controls
+
+Users can pan in multiple ways:
+- Select the Pan tool and drag
+- Hold Space and drag with any tool selected
+- Two-finger drag on touch devices
+- Scroll wheel panning
+
+---
+
 ## Performance Decisions
 
 Here's why I made certain choices to keep things smooth:
 
 ### 1. Throttled Drawing Events
 
-The naive approach would be to emit a WebSocket message on every `mousemove` event. But `mousemove` can fire 100+ times per second on a fast mouse. That's way too much network traffic.
+The naive approach would be to emit a WebSocket message on every mousemove event. But mousemove can fire 100+ times per second on a fast mouse. That's way too much network traffic.
 
 Instead, I throttle to ~60fps (every 16ms):
 
@@ -269,13 +342,13 @@ const CURSOR_INTERVAL = 33; // ~30fps
 
 ### 3. Separate "Live Preview" vs "Final Stroke"
 
-Instead of broadcasting every point individually, I accumulate points locally and send them in batches. The final `stroke_complete` message contains all points, which the server saves.
+Instead of broadcasting every point individually, I accumulate points locally and send them in batches. The final stroke_complete message contains all points, which the server saves.
 
 Other users see:
-- Live preview (from `drawing_step`) - rendered but not saved
-- Final stroke (from `stroke_complete`) - replaces the preview
+- Live preview (from drawing_step) - rendered but not saved
+- Final stroke (from stroke_complete) - replaces the preview
 
-### 4. Quadratic Bézier Curves
+### 4. Quadratic Bezier Curves
 
 Raw mouse points look jagged. I use quadratic curves to smooth them:
 
@@ -333,7 +406,7 @@ For a production app, you'd want vector clocks or CRDTs. For this project, "good
 
 **Problem:** Alice undoes while Bob is mid-stroke. Does Bob see a confusing state?
 
-**Solution:** The `sync_strokes` message only includes completed strokes. Bob's in-progress stroke is still being collected locally and hasn't been saved yet. So the sync doesn't affect it.
+**Solution:** The sync_strokes message only includes completed strokes. Bob's in-progress stroke is still being collected locally and hasn't been saved yet. So the sync doesn't affect it.
 
 ### Clear Canvas Conflicts
 
@@ -345,19 +418,20 @@ For a production app, you'd want vector clocks or CRDTs. For this project, "good
 
 **Problem:** A user's connection drops and reconnects.
 
-**Solution:** Socket.io handles reconnection automatically. On reconnect, the user rejoins the room and gets a fresh `sync_strokes` with the current state. Any strokes they drew before disconnecting are preserved on the server.
+**Solution:** Socket.io handles reconnection automatically. On reconnect, the user rejoins the room and gets a fresh sync_strokes with the current state. Any strokes they drew before disconnecting are preserved on the server.
 
 ---
 
 ## What I'd Do Differently With More Time
 
-1. **Persistent Storage** - Add Redis or a database so drawing survives server restarts
+1. **Persistent Storage** - Add Redis or a database so drawings survive server restarts
 2. **Operational Transform or CRDTs** - Proper conflict resolution instead of "last one wins"
 3. **Lazy Canvas Rendering** - Only redraw the affected region, not the entire canvas
 4. **Undo History Limit** - Currently unlimited, could cause memory issues
 5. **Chunk Large Syncs** - Sending 1000 strokes at once could choke the connection
 6. **Canvas Layers** - Let users draw on separate layers
 7. **Binary Protocol** - JSON is verbose; MessagePack or protobufs would be smaller
+8. **Zoom Support** - Currently only pan is supported, zoom would be useful
 
 ---
 
@@ -367,7 +441,7 @@ This is a toy project, but I tried to be sensible:
 
 1. **Input Validation** - Strokes are validated on the server before saving
 2. **Room Isolation** - Socket.io rooms ensure users only get events from their room
-3. **No Persistence** - Data is in-memory only, so nothing survives a restart (feature or bug depending on perspective)
+3. **No Persistence** - Data is in-memory only, so nothing survives a restart
 4. **Rate Limiting** - Socket.io has built-in reconnection throttling
 
 What's missing that a production app would need:
