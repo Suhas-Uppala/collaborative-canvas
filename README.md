@@ -6,7 +6,7 @@ A real-time collaborative drawing application where multiple users can draw toge
 
 ## Time Spent
 
-**Total Development Time: ~3 days**
+**Total Development Time: ~2 days**
 
 
 ---
