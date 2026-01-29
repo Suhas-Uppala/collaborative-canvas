@@ -8,11 +8,6 @@ A real-time collaborative drawing application where multiple users can draw toge
 
 **Total Development Time: ~3 days**
 
-| Day | Focus Area |
-|-----|------------|
-| Day 1 | Initial setup, basic canvas drawing, WebSocket server |
-| Day 2 | Multi-user sync, ghost cursors, room-based sessions |
-| Day 3 | Undo/redo system, infinite canvas, UI polish, bug fixes |
 
 ---
 
